@@ -19,9 +19,11 @@
 # Load Packages -----------------------------------------------------------
 
 library(tidyverse)
-library(googlesheets4)
 library(lubridate)
+library(gargle)
+library(googlesheets4)
 
+  
 # Get Sessions from Start/End Time ----------------------------------------
 #
 # This function returns the session ids data that were 
@@ -40,10 +42,17 @@ get_session_ids <- function(start_date, end_date){
   sessions_info <- read_sheet("https://docs.google.com/spreadsheets/d/1udvc_rz1GlOJF2mLwpJN0Tlmtu5IfKq2vNtGdE_Ou00/edit?gid=867151523#gid=867151523")%>%
     select(Week, path, timestamp_start, timestamp_end)
   
+  # Convert text to datetime
+  start_date = ymd(start_date)
+  end_date = ymd(end_date)
+  
   # Filter records between the start and end time
-  sessions_info <- sessions_info %>%
-    filter(timestamp_start >= start_date,
-           timestamp_end <= end_date)
+  sessions_info <- sessions_info %>% 
+    mutate(start = start_date,
+           end = end_date)%>%
+    mutate(TimePeriodOverlap = ifelse(between(start, timestamp_start, timestamp_end),1,
+                                 ifelse(between(end, timestamp_start, timestamp_end),1,0)))%>%
+    filter(TimePeriodOverlap == 1)
   
   # Get the session ids
   session_ids <- sessions_info$Week
@@ -97,15 +106,19 @@ find_closest <- function(tsA, tsB) {
 
 get_melixa <- function(session,root_directory, start_time, end_time){
   
+  # Convert start and end times to datetime objects
+  start_time <- ymd(start_time)
+  end_time <- ymd(end_time)
+  
   # Get the directory where the melixa data is stored using the session id
   directory <- get_directory(root_directory = root_directory, session_id = session)
   
   # Find the melixa data
-  files <- list.files(directory)
+  files <- list.files(directory, recursive = TRUE)
   numfiles <- length(files)
   for(i in 1:numfiles){
     file <- files[i]
-    contains_melixa <- grepl("elixa",file)
+    contains_melixa <- grepl("ALL_EXPORTABLE",file)
     if(contains_melixa == TRUE ){
       melixa_file <- file
       break
@@ -122,8 +135,8 @@ get_melixa <- function(session,root_directory, start_time, end_time){
     mutate(temperature = ifelse(temperature == -1, NA, temperature),
            humidity = ifelse(humidity == 255, NA, humidity),
            wind_speed_mean = ifelse(wind_speed_mean == -1, NA, wind_speed_mean))%>%
-    filter(date(date) > start_time,
-           date(date) < end_time)
+    filter(date(date) >= start_time,
+           date(date) <= end_time)
 
   # Return the result
   return(melixa_data_cleaned)
@@ -142,11 +155,11 @@ get_melixa <- function(session,root_directory, start_time, end_time){
 
 get_gallagher <- function(session,root_directory, start_time, end_time){
   
-  # Get the directory where the melixa data is stored using the session id
+  # Get the directory where the gallagher data is stored using the session id
   directory <- get_directory(root_directory = root_directory, session_id = session)
   
-  # Find the melixa data
-  files <- list.files(directory)
+  # Find the gallagher data
+  files <- list.files(directory, recursive = TRUE)
   numfiles <- length(files)
   for(i in 1:numfiles){
     file <- files[i]
@@ -163,8 +176,8 @@ get_gallagher <- function(session,root_directory, start_time, end_time){
   gallagher_data_clean <- gallagher_data_raw %>%
     select(Date,`Live Weight (kg)`, Species, Age, Sex, True_weight, `Tag Number`)%>%
     mutate(Date = dmy_hm(Date))%>%
-    filter(date(Date) > start_time,
-           date(Date) < end_time)%>%
+    filter(date(Date) >= start_time,
+           date(Date) <= end_time)%>%
     filter(Species == "roe",
            True_weight == "yes")
   
@@ -182,6 +195,9 @@ get_gallagher <- function(session,root_directory, start_time, end_time){
 # root_directory: Root directory on your computer that points to the Cembra/Rhemi's/DATA collection/DATA/
 # start_time (datetime object): Desired data start time
 # end_time (datetime object): Desired data end time
+#
+# Returns:
+# A dataframe containing timestamps and filenames of thermal images
 
 find_thermal <- function(session,root_directory, start_time, end_time){
   
@@ -221,6 +237,75 @@ find_thermal <- function(session,root_directory, start_time, end_time){
   }
   # return the result
   return(thermal_data)
+}
+
+
+# Get TrentiNoise ---------------------------------------------------------
+#
+# This function reads in and formats the TrentiNoise weather station data from the Google Drive database.
+#
+# Arguments: 
+# session: session id where the data is stored
+# root_directory: Root directory on your computer that points to the Cembra/Rhemi's/DATA collection/DATA/
+# start_time (datetime object): Desired data start time
+# end_time (datetime object): Desired data end time
+
+get_TrentiNoise <- function(session,root_directory, start_time, end_time){
+  
+  # Get the directory where the gallagher data is stored using the session id
+  directory <- get_directory(root_directory = root_directory, session_id = session)
+  
+  # Find the TrentiNoise data
+  files <- list.files(directory, recursive = TRUE)
+  numfiles <- length(files)
+  for(i in 1:numfiles){
+    file <- files[i]
+    contains_TrentiNoise <- grepl("DATALOG",file)
+    if(contains_TrentiNoise == TRUE ){
+      TrentiNoise_file <- file
+      break
+    }
+  }
+  
+  filepath <- paste(directory,"/",TrentiNoise_file,sep = "")
+  
+  TrentiNoise_data_raw <- read.table(
+    filepath,
+    sep="\t", 
+    header=FALSE)
+  
+  # Clean the data
+  TrentiNoise_data_clean <- TrentiNoise_data_raw %>%
+    # Rename columns
+    rename(year = "V1",
+           month = "V2",
+           day = "V3",
+           hour = "V4",
+           minute = "V5",
+           second = "V6",
+           temperature = "V7",
+           humidity = "V8",
+           pressure = "V9",
+           rain = "V10",
+           wind_speed = "V11",
+           wind_direction1 = "V12",
+           wind_direction2 = "V13",
+           wind_direction3 = "V14",
+           battery = "V15"
+           )%>%
+    # Generate a datetime column
+    mutate(datetime_txt = paste("20",year,"-",month,"-",day," ",hour,":",minute,":",second, sep = ""))%>%
+    mutate(date = ymd_hms(datetime_txt))%>%
+    # Calculate average wind direction
+    mutate(wind_direction = (wind_direction1 + wind_direction2 + wind_direction3)/3)%>%
+    # Remove redundant columns
+    select(-c(wind_direction1,wind_direction2, wind_direction3,year, month, day, hour, minute, second, datetime_txt, battery))%>%
+    filter(date(date) >= start_time,
+           date(date) <= end_time)
+  
+  # Return the result
+  return(TrentiNoise_data_clean)
+  
 }
 
 # Merge Data --------------------------------------------------------------
@@ -274,6 +359,9 @@ build_request <- function(start_date, end_date){
   # Convert start and end dates to dt objects
   start <- ymd(start_date)
   end <- ymd(end_date)
+  
+  # Initialize results table
+  results <- tibble()
   
   # Loop through the session ids and pull data from each session folder
   num_sessions <- length(session_ids)
