@@ -227,7 +227,7 @@ get_albedo <- function(albedo_data,dt){
     filter(diff == min(diff)) %>%
     select(-diff)  # Remove the difference column if no longer needed
   
-  # Get Atmospheric Transmissivity
+  # Get Albedo
   albedo <- closest_row$albedo
   
   # Return result
@@ -433,7 +433,7 @@ get_solar_radiation <- function(dt,
 # Returns:
 # t_ground (float): ground surface temperature (Celcius)
 
-get_t_ground(Ta,SE){
+get_t_ground <- function(Ta,SE) {
   
   # Compute Ground Temperature
   t_ground<-0.0121*SE+Ta
@@ -441,5 +441,173 @@ get_t_ground(Ta,SE){
   # Return the result
   return(t_ground)
 }
+
+
+# Get Ground Emissivity ---------------------------------------------------
+#
+# Finds the closest land surface emissivity  at the time of image capture.
+# 
+# Args:
+# lse_data (dataframe): File where land surface emissivity timeseries is saved (CSV is generated using Google Earth Engine)
+# dt (datetime): Timestamp of the image capture
+# 
+# Returns:
+# float: LSE at the time of image capture
+
+get_lse <- function(lse_data, dt){
+  # Read in the data
+  df <- read.csv(lse_data)
+  
+  # Check that "date" and "LAI" columns exist
+  
+  if("date" %in% colnames(df) == FALSE){
+    print("ERROR: No column called 'date' in LSE dataframe")
+    break
+  }
+  
+  if("LSE" %in% colnames(df) == FALSE){
+    print("ERROR: No column called 'LSE' in LSE dataframe")
+    break
+  }
+  
+  # Covert date column from character to datetime object
+  
+  if(class(df$date) == "character"){
+    df$date <- ymd(df$date)
+  }
+  
+  # Calculate the absolute differences between the time column and target time
+  df <- df %>%
+    mutate(diff = abs(difftime(date, date(dt), units = "days")))
+  
+  # Find the row with the minimum difference
+  closest_row <- df %>%
+    filter(diff == min(diff)) %>%
+    select(-diff)  # Remove the difference column if no longer needed
+  
+  # Get Atmospheric Transmissivity
+  lse <- closest_row$LSE
+  
+  # Return result
+  return(lse)
+}
+
+
+
+# Get Upward Longwave Radiation -------------------------------------------
+#
+# This function estimates upward longwave radiation emitted by the ground based on ground surface temperature and
+# ground emissivty using a relationship derived by Blaxter, 1986. Energy metabolism in animals and man. Cambridge University Press, Cambridge, UK, 340 pp.
+# The code for this function was adapted from the Lu function in the Thermimage R package. 
+#
+# Arguments:
+# Tg (float) = ground surface temperature (Celcius)
+# lse (float) = Land surface emissivity (0 - 1)
+#
+# Returns:
+# lw_upward (float): Upward facing ground radiation (W/m2)
+
+get_lw_upward <- function(Tg, lse){
+  
+  # Convert ground temperature from celcius to Kelvin
+  GT <- Tg + 273.15
+  
+  # Estimate upward longwave radiation
+  lw_upward <- lse*5.67e-08*(GT)^4
+  
+  # Return the result
+  return(lw_upward)
+}
+
+
+# Get Cloud Cover Fraction ------------------------------------------------
+#
+# This function finds the cloud cover fraction to the time of image capture
+#
+# Args:
+# cloud_cover_data (string): Filepath where cloud cover timeseries is stored (CSV is generated using Google Earth Engine)
+# dt (datetime): Timestamp of the image capture
+#
+# Returns:
+# cloud_cover (numeric): Cloud cover fraction at the time of image capture
+
+get_cloud_cover <- function(cloud_cover_data, dt){
+  
+  # Read in the data
+  df <- read.csv(cloud_cover_data)
+  
+  # Check that "date" and "LAI" columns exist
+  
+  if("timestamp" %in% colnames(df) == FALSE){
+    print("ERROR: No column called 'timestamp' in cloud cover dataframe")
+    break
+  }
+  
+  if("cloud_fraction" %in% colnames(df) == FALSE){
+    print("ERROR: No column called 'cloud_fraction' in cloud cover dataframe")
+    break
+  }
+  
+  # Covert date column from character to datetime object
+  
+  if(class(df$timestamp) == "character"){
+    df$timestamp <- ymd_hms(df$timestamp)
+  }
+  
+  # Calculate the absolute differences between the time column and target time
+  df <- df %>%
+    mutate(diff = abs(difftime(timestamp, dt, units = "secs")))
+  
+  # Find the row with the minimum difference
+  closest_row <- df %>%
+    filter(diff == min(diff)) %>%
+    select(-diff)  # Remove the difference column if no longer needed
+  
+  # Get Atmospheric Transmissivity
+  cloud_cover <- closest_row$cloud_fraction
+  
+  # Return result
+  return(cloud_cover)
+  
+}
+
+# Get Downward Longwave Radiation -----------------------------------------
+#
+# This function estimates downward incoming longwave radiation based on air temperature, humidity, and fractional cloud cover
+# using a relationship derived from Konzelmann et al. 1994.
+# The code for this function was adapted from the Ld function in the Thermimage R package. 
+#
+# Arguments:
+# Ta (float) = ground surface temperature (Celcius)
+# RH (float) = Relative humidity (0 - 1)
+# n (float) = Fractional cloud cover (0 - 1)
+# Returns:
+# lw_downward (float): Downward facing incoming longwave radiation (W/m2)
+
+get_lw_downard <- function(Ta, RH, n) {
+  
+  # Convert air temperature from celcius to kelvin
+  AT <- Ta + 273.15
+  
+  # Estimate water vapor pressure of air
+  WVPs<-611*exp(17.27*(AT-273.15)/(AT-36))  # Pascals
+  WVP<-RH*WVPs # saturated vapour pressure at AT
+  
+  # Emissivity of clear sky
+  ecs<-0.23 + 0.443*(WVP/AT)^(1/8) # emissivity clear sky
+  
+  # Emissivity of clouds
+  ecl<-0.976 
+  
+  # Total emissivity of the sky
+  etotal<-ecs*(1-n^2) + ecl*n^2
+  
+  # Calculate downward longwave radiation
+  Ld<-etotal*5.67e-08*AT^4
+  
+  # Return result
+  return(Ld)
+}
+
 
 

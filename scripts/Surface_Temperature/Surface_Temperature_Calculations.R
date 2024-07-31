@@ -45,11 +45,13 @@ HEMISPHERE <- "north" # hemisphere of the earth at the location where solar radi
 root <- "/Users/rhemitoth/Library/CloudStorage/GoogleDrive-rhemitoth@g.harvard.edu/Shared drives/2C2T_Cembra/Cembra/Rhemi's /DATA collection/DATA/"
 database_request <- build_request(start_date = start, end_date = end, root_directory = root)
 
-# Step 3: Specify location of albedo, atmospheric transmissivity, and LAI timeseries data on computer --------
+# Step 3: Specify location of albedo, atmospheric transmissivity, LAI, and LSE timeseries data on computer --------
 
 lai_data <- "/Users/rhemitoth/Library/CloudStorage/GoogleDrive-rhemitoth@g.harvard.edu/My Drive/Cembra/Cembra_GEE/LAI_TimeSeries.csv"
 atmospheric_transmissivity_data <- "/Users/rhemitoth/Library/CloudStorage/GoogleDrive-rhemitoth@g.harvard.edu/My Drive/Cembra/Cembra_GEE/ClearSkyIndexTimeSeries.csv"
 albedo_data <- "/Users/rhemitoth/Library/CloudStorage/GoogleDrive-rhemitoth@g.harvard.edu/My Drive/Cembra/Cembra_GEE/albedo_time_series.csv"
+lse_data <- "/Users/rhemitoth/Library/CloudStorage/GoogleDrive-rhemitoth@g.harvard.edu/My Drive/Cembra/Cembra_GEE/LSE_TimeSeries.csv"
+cloud_cover_data <- "/Users/rhemitoth/Library/CloudStorage/GoogleDrive-rhemitoth@g.harvard.edu/My Drive/Cembra/Cembra_GEE/CloudCover_TimeSeries_Sentinel5P_NRTI_Hourly.csv"
 
 # Step 4: Perform the Calculations ----------------------------------------
 
@@ -83,6 +85,10 @@ for(i in 1:num_images){
   a_trans <- get_atmospheric_trans(at_data = atmospheric_transmissivity_data,
                                    dt = img_datetime)
   
+  # Get the land surface emissivity at the time of image capture
+  lse <- get_lse(lse_data = lse_data,
+                 dt = img_datetime)
+  
   # Get the LAI at the time of image capture
   lai <- get_lai(lai_data = lai_data,
                  dt = img_datetime)
@@ -100,10 +106,16 @@ for(i in 1:num_images){
                                 lai = lai)
   
   # Estimate ground surface temperature
-  ground_temp <- t_ground(Ta = temp, SE = solrad)
+  ground_temp <- get_t_ground(Ta = temp, SE = solrad)
   
-  # Estimate upward facing longwave radiation from the ground assuming a ground emissivity of 0.97
+  # Estimate cloud cover fraction
+  cloud_cover <- get_cloud_cover(cloud_cover_data = cloud_cover_data,
+                                 dt = img_datetime)
   
-  
+  # Estimate longwave radiation
+  upward_lw <- get_lw_upward(Tg = ground_temp, lse = lse) # Upward facing longwave radiation from the ground
+  downward_lw <- get_lw_downard(Ta = temp, RH = hum, n = cloud_cover) # Downward facing longwave radiation from the sky
+  lw_total <- upward_lw + downward_lw
+
   
 }
