@@ -22,6 +22,7 @@ library(tidyverse)
 library(lubridate)
 library(gargle)
 library(googlesheets4)
+library(zoo)
 
   
 # Get Sessions from Start/End Time ----------------------------------------
@@ -203,20 +204,19 @@ find_thermal <- function(session,root_directory, start_time, end_time){
   
   # Get the directory where the thermal data is stored using the session id
   directory <- get_directory(root_directory = root_directory, session_id = session)
-  directory <- paste(directory,"/","thermal",sep = "")
-  
- 
+  directory <- paste(directory,"/","ThermoCam",sep = "")
   
   # Initialize a dataframe of filenames and timestamps
   files <- list.files(directory)
   numfiles <- length(files)
   thermal_data <- tibble(timestamp = rep(ymd_hms("1900-01-01 00:00:00"),numfiles),
-                         filepath = rep("hi",numfiles))
+                         filepath = rep("hi",numfiles),
+                         filename = rep("hi",numfiles))
   for(i in 1:numfiles){
     # get the filename
     file <- files[i]
     # get the filepath
-    fpath <- paste(directory,file,sep="")
+    fpath <- paste(directory,"/",file,sep="")
     # get the timestamp from the filename
     file_stringsplit <- strsplit(file,"-")
     date_raw <- file_stringsplit[[1]][2]
@@ -234,12 +234,13 @@ find_thermal <- function(session,root_directory, start_time, end_time){
     # Populate the dataframe
     thermal_data$timestamp[i] <- ts
     thermal_data$filepath[i] <- fpath
+    thermal_data$filename[i] <- file
   }
   # return the result
   return(thermal_data)
 }
 
-
+  
 # Get TrentiNoise ---------------------------------------------------------
 #
 # This function reads in and formats the TrentiNoise weather station data from the Google Drive database.
@@ -308,6 +309,63 @@ get_TrentiNoise <- function(session,root_directory, start_time, end_time){
   
 }
 
+
+# Combine Weather Data ----------------------------------------------------
+#
+# This function is used to generate one weather dataset that integrates
+# information from the Melixa and TrentiNoise weather stations. 
+# First, the Melixa data are resampled to a 3 second resolution by interpolating
+# between the 5 min averages.
+# Then, the interpolated Melixa data are matched to the closest TrentiNoise data in time
+# and the values are averaged. 
+#
+# Args:
+# melixa (dataframe)
+# TrentiNoise (dataframe)
+#
+# Returns:
+# datatable
+
+combine_weather <- function(melixa_dat, TrentiNoise_dat){
+  
+  # Interpolate Temperature
+  zoo_melixa_temp <- zoo(melixa_dat$temperature, melixa_dat$date)
+  zoo_TrentiNoise_temp <- zoo(TrentiNoise_dat$temperature, TrentiNoise_dat$date)
+  temp <- merge(zoo_melixa_temp,zoo_TrentiNoise_temp)
+  temp$zoo_melixa_temp <- na.approx(temp$zoo_melixa_temp)
+  
+  # Compute Average Temperature
+  temp$temperature <- (temp$zoo_melixa_temp + temp$zoo_TrentiNoise_temp)/2
+  
+  # Interpolate Wind Speed
+  zoo_melixa_ws <- zoo(melixa_dat$wind_speed_mean, melixa_dat$date)
+  zoo_TrentiNoise_ws <- zoo(TrentiNoise_dat$wind_speed, TrentiNoise_dat$date)
+  ws <- merge(zoo_melixa_ws,zoo_TrentiNoise_ws)
+  ws$zoo_melixa_ws <- na.approx(ws$zoo_melixa_ws)
+  
+  # Compute Average Wind Speed
+  ws$wind_speed <- (ws$zoo_melixa_ws + ws$zoo_TrentiNoise_ws)/2
+  
+  # Interpolate Humidity
+  zoo_melixa_hum <- zoo(melixa_dat$humidity, melixa_dat$date)
+  zoo_TrentiNoise_hum <- zoo(TrentiNoise_dat$humidity, TrentiNoise_dat$date)
+  hum <- merge(zoo_melixa_hum,zoo_TrentiNoise_hum)
+  hum$zoo_melixa_hum <- na.approx(hum$zoo_melixa_hum)
+  
+  # Compute Average Humidity
+  hum$humidity <- (hum$zoo_melixa_hum + hum$zoo_TrentiNoise_hum)/2
+  
+  # Compile Data
+  datetimes <- temp %>% as.data.frame() %>% rownames() %>% ymd_hms()
+  compiled_dat <- tibble(date = datetimes,
+                         temperature = as.numeric(temp$temperature),
+                         wind_speed = as.numeric(ws$wind_speed),
+                         humidity = as.numeric(hum$humidity))%>%
+    na.omit()
+  
+  return(compiled_dat)
+}
+
 # Merge Data --------------------------------------------------------------
 #
 # This function is used to combine the melixa, gallagher, and thermal data into
@@ -322,20 +380,33 @@ get_TrentiNoise <- function(session,root_directory, start_time, end_time){
 # Returns:
 # datatable
 
-merge_datasets <- function(melixa, gallagher, thermal){
+merge_datasets <- function(weather, gallagher, thermal){
   
-  # Join the gallagher data to the melixa data
+  # Join the gallagher data to the weather data
   
-  gallagher <- gallagher %>%
-    rowwise() %>%
-    mutate(closest_timestep = find_closest(Date, melixa$date))
+  # gallagher <- gallagher %>%
+  #   rowwise() %>%
+  #   mutate(closest_timestep = find_closest(Date, melixa$date))
   
   # Join tableA with tableB on the closest timestep
-  gallagher_melixa <- gallagher %>%
-    left_join(melixa, by = c("closest_timestep" = "date"))
+  # gallagher_melixa <- gallagher %>%
+  #   left_join(melixa, by = c("closest_timestep" = "date"))
+  # 
   
-  return_gallagher_melixa
+  # Match weather data to thermal data using timesteps 
   
+  thermal <- thermal %>%
+    rowwise() %>%
+    mutate(closest_timestep = find_closest(timestamp, weather$date))
+  
+  thermal_weather <- thermal %>%
+    left_join(weather, by = c("closest_timestep" = "date"))
+  
+  # Clean results
+  res <- thermal_weather %>%
+    select(timestamp,filepath,filename,temperature,humidity,wind_speed)
+  
+  return(res)
   
 }
 
@@ -346,11 +417,12 @@ merge_datasets <- function(melixa, gallagher, thermal){
 # Args:
 # start_date (string): Start date of data ("YYYY-MM-DD")
 # end_date (string): End date of data ("YYYY-MM-DD")
+# root_directory (string): Root directory on your computer that points to the Cembra/Rhemi's/DATA collection/DATA/
 #
 # Returns:
 # Results table
 
-build_request <- function(start_date, end_date){
+build_request <- function(start_date, end_date, root_directory){
   
   # Get the session ids that fall between the start and end dates
   
@@ -360,16 +432,33 @@ build_request <- function(start_date, end_date){
   start <- ymd(start_date)
   end <- ymd(end_date)
   
-  # Initialize results table
-  results <- tibble()
+  # Initialize results table 
+  results <- tibble(timestamp = ymd_hms(),
+                    filepath = character(),
+                    filename = character(),
+                    temperature = numeric(),
+                    humidity = numeric(),
+                    windspeed = numeric(),
+                    lai = numeric(),
+                    atmospheric_trans = numeric(),
+                    albedo = numeric())
   
   # Loop through the session ids and pull data from each session folder
   num_sessions <- length(session_ids)
   for(i in 1:num_sessions){
     session <- session_ids[i]
-    melixa <- get_melixa(session, start, end)
-    gallgher <- get_gallagher(session,start,end)
-    thermal <- get_thermal(session,start,end)
-    
+    melixa <- get_melixa(session, root_directory, start, end)
+    #gallgher <- get_gallagher(session,root_directory,start,end)
+    thermal <- find_thermal(session,root_directory,start,end)
+    TrentiNoise <- get_TrentiNoise(session,root_directory,start,end)
+    # Create a combined weather dataset
+    combined_weather <- combine_weather(melixa, TrentiNoise)
+    # Create a merged dataset and append it to the results table
+    merged_data <- merge_datasets(weather = combined_weather, thermal = thermal)
+    # Append merged dataset to results table
+    results <- rbind(results,merged_data)
   }
+  
+  return(results)
 }
+

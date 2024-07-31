@@ -58,3 +58,21 @@ head(melixa)
 TrentiNoise <- get_TrentiNoise(session = session_ids[1], root_directory = root, start_time = start, end_time = end)
 head(TrentiNoise)
 
+
+# Combine Weather Data Example --------------------------------------------
+
+weather_data <- combine_weather(melixa_dat = melixa, TrentiNoise_dat = TrentiNoise)
+
+
+# Get Thermal Data Example ------------------------------------------------
+
+thermal <- find_thermal(session = session_ids[1], root_directory = root, start_time = start, end_time = end)
+
+# Merge Datasets Example --------------------------------------------------
+
+merged_data <- merge_datasets(weather = weather_data, thermal = thermal)
+
+
+# Build Request Example ---------------------------------------------------
+
+request <- build_request(start_date = start, end_date = end, root_directory = root)
